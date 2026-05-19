@@ -10,6 +10,76 @@ from molSimplify.Classes.ligand import ligand_breakdown
 import warnings
 warnings.filterwarnings("ignore")
 
+# ── Bond GNN integration ────────────────────────────────────────────────────
+
+_bond_gnn_cache = None   # loaded once, reused across calls
+
+def _load_bond_gnn(ckpt_path=None):
+    global _bond_gnn_cache
+    if _bond_gnn_cache is not None:
+        return _bond_gnn_cache
+    if ckpt_path is None:
+        ckpt_path = os.path.join(os.path.dirname(__file__), 'bond_gnn', 'bond_gnn.pt')
+    if not os.path.exists(ckpt_path):
+        return None
+    from src.bond_gnn.model import BondGNN
+    ckpt = torch.load(ckpt_path, map_location='cpu')
+    model = BondGNN(hidden_dim=ckpt.get('hidden_dim', 128),
+                    n_layers=ckpt.get('n_layers', 4))
+    model.load_state_dict(ckpt['model'])
+    model.eval()
+    _bond_gnn_cache = model
+    return model
+
+
+def build_mol_with_bond_gnn(positions, atom_types, device='cpu'):
+    """
+    Build RDKit mol using Bond GNN for bond prediction.
+    Falls back to openbabel if Bond GNN unavailable.
+
+    positions  : [N, 3] tensor  (ligand atoms only)
+    atom_types : [N] int tensor  (indices into IDX2ATOM)
+    """
+    from src.bond_gnn.model import ATOM_TYPES, ATOM2IDX
+
+    bond_gnn = _load_bond_gnn()
+    if bond_gnn is None:
+        return build_mol(positions, atom_types)   # fallback
+
+    # Build one-hot from atom type indices
+    n = positions.shape[0]
+    oh = torch.zeros(n, len(ATOM_TYPES))
+    syms = []
+    for i, t in enumerate(atom_types):
+        sym = const.IDX2ATOM.get(int(t), 'C')
+        syms.append(sym)
+        if sym in ATOM2IDX:
+            oh[i, ATOM2IDX[sym]] = 1
+
+    pos_cpu = positions.float().cpu()
+    oh_cpu  = oh.cpu()
+
+    try:
+        bonds = bond_gnn.predict_bonds(pos_cpu, oh_cpu, threshold=0.5)
+    except Exception:
+        return build_mol(positions, atom_types)
+
+    # Build RDKit mol from predicted bonds
+    rwmol = Chem.RWMol()
+    for sym in syms:
+        rwmol.AddAtom(Chem.Atom(sym))
+    conf = Chem.Conformer(n)
+    for i in range(n):
+        p = pos_cpu[i]
+        conf.SetAtomPosition(i, (float(p[0]), float(p[1]), float(p[2])))
+    rwmol.AddConformer(conf, assignId=True)
+    for (i, j) in bonds:
+        if not rwmol.GetBondBetweenAtoms(i, j):
+            rwmol.AddBond(i, j, Chem.BondType.SINGLE)
+
+    rwmol = _fix_valence(rwmol)
+    return rwmol
+
 def get_bond_order(atom1, atom2, distance, check_exists=True, margins=const.MARGINS_EDM):
     distance = 100 * distance  # We change the metric
 

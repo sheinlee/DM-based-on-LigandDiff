@@ -1,16 +1,17 @@
 """
-generate_test.py — test version with three fixes vs generate_orig.py:
-  1. BondedOct=False in parse_complex (input ligand splitting)
-  2. BondedOct=False already in sanitycheck (molecule_builder.py)
-  3. connectivity_thresh=0.8 — accept ligand if largest fragment >= 80% atoms
-  4. total_atoms check relaxed to tolerance of ±2 atoms (counts isolated atoms
-     that molSimplify misses in non-octahedral geometries)
+generate_test.py — Ln complex ligand generation with:
+  1. BondedOct=False in parse_complex (supports CN 4-12)
+  2. Bond GNN for chemically valid bond prediction
+  3. Tanimoto similarity comparison against CSD training set
+  4. Relaxed connectivity_thresh and atom_tol for evaluation
 """
 import argparse
 import os
 import numpy as np
 import tempfile
 import torch
+from rdkit import Chem
+from rdkit.Chem import AllChem, DataStructs
 from src import const
 from src import utils
 from src.lightning import DDPM
@@ -18,9 +19,46 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
 from sampling import reform_data
 from torch_scatter import scatter_add
-from src.molecule_builder import BasicLigandMetrics, build_mol, extract_ligand, sanitycheck, write_xyz_file
+from src.molecule_builder import (BasicLigandMetrics, build_mol,
+    build_mol_with_bond_gnn, extract_ligand, sanitycheck, write_xyz_file)
 from molSimplify.Classes.mol3D import mol3D
 from molSimplify.Classes.ligand import ligand_breakdown
+
+
+def load_train_smiles(path=None):
+    """Load training set SMILES for novelty/similarity analysis."""
+    if path is None:
+        path = os.path.join(os.path.dirname(__file__), 'data', 'train_smiles.csv')
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        smiles = [s.strip() for s in f if s.strip()]
+    fps = []
+    for smi in smiles:
+        mol = Chem.MolFromSmiles(smi)
+        if mol:
+            fps.append((smi, AllChem.GetMorganFingerprintAsBitVect(mol, 2, 2048)))
+    return fps   # list of (smiles, fingerprint)
+
+
+def tanimoto_analysis(smi, train_fps):
+    """
+    Compare generated SMILES against training set.
+    Returns (best_tanimoto, best_match_smi, is_exact_match).
+    """
+    if not train_fps or not smi:
+        return 0.0, None, False
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return 0.0, None, False
+    fp = AllChem.GetMorganFingerprintAsBitVect(mol, 2, 2048)
+    best_sim, best_smi = 0.0, None
+    for ref_smi, ref_fp in train_fps:
+        sim = DataStructs.TanimotoSimilarity(fp, ref_fp)
+        if sim > best_sim:
+            best_sim, best_smi = sim, ref_smi
+    is_exact = (best_sim >= 0.999)
+    return best_sim, best_smi, is_exact
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--outdir', type=str)
@@ -135,8 +173,11 @@ def main(outdir, model, complex, batch_size=16, n_samples=1,
     print(f'Using device: {device}')
 
     ddpm = DDPM.load_from_checkpoint(model, map_location=device).eval().to(device)
-    # FIX 2: relaxed connectivity threshold
     ddpm.ligand_metrics = BasicLigandMetrics(connectivity_thresh=connectivity_thresh)
+
+    # Load training set SMILES for Tanimoto comparison
+    train_fps = load_train_smiles()
+    print(f'Loaded {len(train_fps)} training SMILES for topology comparison')
 
     dataset = read_molecule(complex) * n_samples
     print(f'{len(dataset)} samples will be generated (n_ligands x n_samples)')
@@ -180,13 +221,37 @@ def main(outdir, model, complex, batch_size=16, n_samples=1,
                 print(f'  [debug] pairwise dist min={dists[dists>0].min():.3f} max={dists.max():.3f} mean={dists[dists>0].mean():.3f}')
 
             ligands = extract_ligand(x, one_hot, ligand_diff, batch_seg)
-            rdmols = [build_mol(*graph) for graph in ligands]
+            # Use Bond GNN for chemically valid bond prediction
+            rdmols = [build_mol_with_bond_gnn(pos, types)
+                      for pos, types in ligands]
             (validity, connectivity), (valid, connected_mol, connected_index) = \
                 ddpm.ligand_metrics.evaluate_rdmols(rdmols)
 
             stats['total'] += bs.item()
             stats['valid'] += validity
             stats['connected'] += connectivity
+
+            # Tanimoto topology comparison
+            for mol in connected_mol:
+                try:
+                    smi = Chem.MolToSmiles(mol)
+                    sim, match_smi, exact = tanimoto_analysis(smi, train_fps)
+                    stats.setdefault('tanimoto_sum', 0.0)
+                    stats.setdefault('tanimoto_n', 0)
+                    stats.setdefault('exact_matches', 0)
+                    stats.setdefault('high_sim', 0)   # Tanimoto > 0.7
+                    stats['tanimoto_sum'] += sim
+                    stats['tanimoto_n'] += 1
+                    if exact:
+                        stats['exact_matches'] += 1
+                    if sim > 0.7:
+                        stats['high_sim'] += 1
+                    label = ('EXACT' if exact
+                             else 'sim>{:.0%}'.format(sim) if sim > 0.5
+                             else 'novel')
+                    print(f'    topology {label} (Tanimoto={sim:.3f}): {smi[:60]}')
+                except Exception:
+                    pass
 
             print(f'  batch {b}: valid={validity}/{bs.item()}, connected={connectivity}/{bs.item()}')
 
@@ -219,6 +284,12 @@ def main(outdir, model, complex, batch_size=16, n_samples=1,
                         reason.append(f'atom_count {total_atoms} vs {natoms[i].item()}')
                     print(f'    sample {b}_{i} rejected: {", ".join(reason)}')
 
+    # Tanimoto summary
+    n_tan = stats.get('tanimoto_n', 0)
+    avg_tan = stats.get('tanimoto_sum', 0) / max(n_tan, 1)
+    exact   = stats.get('exact_matches', 0)
+    high    = stats.get('high_sim', 0)
+
     print('\n=== Summary ===')
     print(f'  Total generated:   {stats["total"]}')
     print(f'  Valid ligands:     {stats["valid"]}')
@@ -226,6 +297,12 @@ def main(outdir, model, complex, batch_size=16, n_samples=1,
     print(f'  No overlap:        {stats["no_overlap"]}')
     print(f'  Atom count match:  {stats["atom_match"]}')
     print(f'  Saved complexes:   {num_saved}')
+    if n_tan > 0:
+        print(f'\n=== Topology vs CSD Training Set ({n_tan} connected ligands) ===')
+        print(f'  Avg Tanimoto:      {avg_tan:.3f}')
+        print(f'  High sim (>0.7):   {high}/{n_tan}  ← same scaffold as known Ln ligand')
+        print(f'  Exact match:       {exact}/{n_tan}  ← reproduced training structure')
+        print(f'  Novel (<0.7):      {n_tan-high}/{n_tan}  ← new chemical scaffold')
     print(f'\nOutput directory: {outdir}')
 
 
