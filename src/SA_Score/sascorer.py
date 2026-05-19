@@ -33,9 +33,9 @@ def readFragmentScores(name='fpscores'):
     import gzip
     global _fscores
     # generate the full path filename:
-    #if name == "fpscores":
-    #    name = op.join(op.dirname(__file__), name)
-    data = pickle.load(gzip.open('/mnt/gs21/scratch/jinhongn/pyg/DiffLinker_iron/test/multi_metal_nobi/src/SA_Score/fpscores.pkl.gz'))
+    if name == "fpscores":
+        name = op.join(op.dirname(__file__), name)
+    data = pickle.load(gzip.open(name + '.pkl.gz'))
     outDict = {}
     for i in data:
         for j in range(1, len(i)):

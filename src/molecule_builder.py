@@ -80,12 +80,13 @@ def build_mol(positions, atom_types,use_openbabel=True):
     Returns:
         RDKit molecule
     """
+    import torch
+    if torch.is_tensor(positions) and torch.isnan(positions).any():
+        return None
     if use_openbabel:
         mol = make_mol_openbabel(positions, atom_types)
-                                
     else:
         raise NotImplementedError
-
     return mol
 
 
@@ -125,7 +126,40 @@ def make_mol_openbabel(positions, atom_types):
         mol.AddBond(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(),
                 bond.GetBondType())
 
+    mol = _fix_valence(mol)
     return mol
+
+
+# Max normal valence for each element
+_MAX_VALENCE = {'C': 4, 'N': 3, 'O': 2, 'S': 6, 'F': 1,
+                'Cl': 1, 'Br': 1, 'P': 5}
+
+def _fix_valence(rwmol):
+    """Remove excess bonds from over-valent atoms (longest bond removed first)."""
+    conf = rwmol.GetConformer()
+    changed = True
+    while changed:
+        changed = False
+        for atom in rwmol.GetAtoms():
+            sym = atom.GetSymbol()
+            max_v = _MAX_VALENCE.get(sym, 99)
+            bonds = list(atom.GetBonds())
+            # Count explicit valence (sum of bond orders)
+            val = sum(int(b.GetBondTypeAsDouble()) for b in bonds)
+            if val > max_v:
+                # Remove the longest bond involving this atom
+                idx = atom.GetIdx()
+                pos_i = conf.GetAtomPosition(idx)
+                def bond_len(b):
+                    j = b.GetOtherAtomIdx(idx)
+                    p = conf.GetAtomPosition(j)
+                    return ((p.x-pos_i.x)**2+(p.y-pos_i.y)**2+(p.z-pos_i.z)**2)**0.5
+                longest = max(bonds, key=bond_len)
+                rwmol.RemoveBond(longest.GetBeginAtomIdx(),
+                                 longest.GetEndAtomIdx())
+                changed = True
+                break  # restart after modification
+    return rwmol
    
 
 
@@ -161,7 +195,8 @@ class BasicLigandMetrics(object):
         connected_index=[]
         for index,mol in valid:
             mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True)
-            if len(mol_frags) == 1:
+            largest_frag_size = max(frag.GetNumAtoms() for frag in mol_frags)
+            if largest_frag_size / mol.GetNumAtoms() >= self.connectivity_thresh:
                 connected.append(mol_frags[0])
                 connected_index.append(index)
 
@@ -189,7 +224,7 @@ def sanitycheck(positions, atom_types,metal):
     mol=mol3D()
     mol.readfromxyz(f'{tmp_file}.xyz')
     overlapping=mol.sanitycheck(silence=True)[0]
-    liglist,ligdents,ligcon=ligand_breakdown(mol,silent=True,BondedOct=True)
+    liglist,ligdents,ligcon=ligand_breakdown(mol,silent=True,BondedOct=False)
     return overlapping,liglist
     
     

@@ -10,10 +10,19 @@ TORCH_INT = torch.int8
 # Atom idx for one-hot encoding
 ATOM2IDX = {'C': 0, 'N': 1, 'O': 2, 'S': 3, 'Br': 4, 'Cl': 5, 'P': 6, 'F': 7}
 IDX2ATOM = {0: 'C', 1: 'N', 2: 'O', 3: 'S', 4: 'Br', 5: 'Cl', 6: 'P', 7: 'F'}
-idx2metals={24:'Cr',25:'Mn',26:'Fe',27:'Co',28:'Ni',29:'Cu',30:'Zn',44:'Ru',46:'Pd',78:'Pt'}
-metals=['Cr','Mn','Fe','Co','Ni','Cu','Zn','Ru','Pd','Pt']
 
-CHARGES = {'C': 6, 'O': 8, 'N': 7, 'S': 16, 'Cl': 17, 'P': 15, 'Br': 35, 'F': 9,'Cr':24,'Mn':25,'Fe':26,'Co':27,'Ni':28,'Cu':29,'Zn':30,'Ru':44,'Pd':46,'Pt':78}
+# idx2metals={24:'Cr',25:'Mn',26:'Fe',27:'Co',28:'Ni',29:'Cu',30:'Zn',44:'Ru',46:'Pd',78:'Pt'}
+# metals=['Cr','Mn','Fe','Co','Ni','Cu','Zn','Ru','Pd','Pt']
+# CHARGES = {'C': 6, 'O': 8, 'N': 7, 'S': 16, 'Cl': 17, 'P': 15, 'Br': 35, 'F': 9,'Cr':24,'Mn':25,'Fe':26,'Co':27,'Ni':28,'Cu':29,'Zn':30,'Ru':44,'Pd':46,'Pt':78}
+
+# idx2metals={24:'Cr',25:'Mn',26:'Fe',27:'Co',28:'Ni',29:'Cu',30:'Zn',44:'Ru',46:'Pd',57:'La',78:'Pt'}
+# metals=['Cr','Mn','Fe','Co','Ni','Cu','Zn','Ru','Pd','La','Pt']
+# CHARGES = {'C': 6, 'O': 8, 'N': 7, 'S': 16, 'Cl': 17, 'P': 15, 'Br': 35, 'F': 9,'Cr':24,'Mn':25,'Fe':26,'Co':27,'Ni':28,'Cu':29,'Zn':30,'Ru':44,'Pd':46,'La':57,'Pt':78}
+
+idx2metals={24:'Cr',25:'Mn',26:'Fe',27:'Co',28:'Ni',29:'Cu',30:'Zn',44:'Ru',46:'Pd',57:'La',58: 'Ce',59: 'Pr',60: 'Nd',61: 'Sm',62: 'Eu',63: 'Gd',64: 'Tb',65: 'Dy',66: 'Ho',67: 'Er',68: 'Tm',69: 'Yb',70: 'Lu'}
+metals=['Cr','Mn','Fe','Co','Ni','Cu','Zn','Ru','Pd','La', 'Ce', 'Pr', 'Nd', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu']
+CHARGES = {'C': 6, 'O': 8, 'N': 7, 'S': 16, 'Cl': 17, 'P': 15, 'Br': 35, 'F': 9,'Cr':24,'Mn':25,'Fe':26,'Co':27,'Ni':28,'Cu':29,'Zn':30,'Ru':44,'Pd':46,'La':57,'Ce': 58, 'Pr':59, 'Nd':60, 'Sm':61, 'Eu':62, 'Gd':63, 'Tb':64, 'Dy':65, 'Ho':66, 'Er':67, 'Tm':68, 'Yb':69, 'Lu':70}
+
 # One-hot atom types
 NUMBER_OF_ATOM_TYPES = len(ATOM2IDX)
 

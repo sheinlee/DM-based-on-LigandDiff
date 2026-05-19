@@ -10,6 +10,7 @@ from torch.nn.init import kaiming_uniform_
 from torch.nn.init import zeros_
 from torch_scatter import scatter
 from src.gvp_model import GVPNetwork
+import os
 
 class DenseLayer(nn.Linear):
     def __init__(
@@ -202,11 +203,12 @@ class EquivariantBlock(nn.Module):
 
 
 class EGNN(nn.Module):
-    def __init__(self, in_node_nf, in_edge_nf, hidden_nf, device='cpu', activation='silu', n_layers=3, attention=False,
+    def __init__(self, in_node_nf, in_edge_nf, hidden_nf, pretrained_weights,device='cpu', activation='silu', n_layers=3, attention=False,
                  tanh=False, norm_constant=1,inv_sublayers=2,sin_embedding=False,normalization_factor=100, aggregation_method='sum',
                  norm_diff=True, out_node_nf=None,  coords_range=15, normalization=None
                   ):
         super(EGNN, self).__init__()
+        print(f"Pretrained weights path: {pretrained_weights}")  # 打印路径以确认
         if out_node_nf is None:
             out_node_nf = in_node_nf
         self.hidden_nf = hidden_nf
@@ -216,6 +218,8 @@ class EGNN(nn.Module):
         self.norm_diff = norm_diff
         self.normalization_factor = normalization_factor
         self.aggregation_method = aggregation_method
+
+        self.pretrained_weights=pretrained_weights
 
         if sin_embedding:
             self.sin_embedding = SinusoidsEmbeddingNew()
@@ -236,10 +240,38 @@ class EGNN(nn.Module):
                                                                sin_embedding=self.sin_embedding,
                                                                normalization_factor=self.normalization_factor,
                                                                aggregation_method=self.aggregation_method))
+        self.add_module("additional_e_block", EquivariantBlock(hidden_nf, edge_feat_nf=edge_feat_nf, device=device,
+                                                               activation=activation, n_layers=inv_sublayers,
+                                                               attention=attention, norm_diff=norm_diff, tanh=tanh,
+                                                               coords_range=coords_range, norm_constant=norm_constant,
+                                                               normalization=normalization,
+                                                               sin_embedding=self.sin_embedding,
+                                                               normalization_factor=self.normalization_factor,
+                                                               aggregation_method=self.aggregation_method))
+
         if torch.cuda.is_available():
             self.to(self.device)
         else:
             self.to('cpu')
+        if pretrained_weights:
+            if os.path.exists(pretrained_weights):
+                print("Weight file found, loading...")
+                self.load_pretrained(pretrained_weights)
+            else:
+                print(f"Weight file not found at {pretrained_weights}")
+
+    def load_pretrained(self, weights_path):
+        try:
+            state_dict = torch.load(weights_path, map_location=self.device)
+            self.load_state_dict(state_dict, strict=False)
+            print("Pretrained weights loaded!")
+        except Exception as e:
+            print(f"Failed to load weights: {e}")
+        # 冻结参数的示例
+        for name, param in self.named_parameters():
+            if 'additional_e_block' not in name:  # 假设新层包含这个字符串
+                param.requires_grad = False
+        print("Parameters frozen except for the new layer.")
 
     def forward(self, h, x, edge_index, ligand_diff):
         distances, _ = coord2diff(x, edge_index)
@@ -248,6 +280,11 @@ class EGNN(nn.Module):
         h = self.embedding(h)
         for i in range(0, self.n_layers):
             h, x = self._modules["e_block_%d" % i](
+                h, x, edge_index, 
+                ligand_diff=ligand_diff,
+                edge_attr=distances
+            )
+        h, x = self._modules["additional_e_block"](
                 h, x, edge_index, 
                 ligand_diff=ligand_diff,
                 edge_attr=distances
@@ -283,7 +320,7 @@ def coord2diff(x, edge_index, norm_constant=1):
 
 class Dynamics(nn.Module):
     def __init__(
-            self, in_node_nf,n_dims,  ligand_group_node_nf, 
+            self, in_node_nf,n_dims,  ligand_group_node_nf, pretrained_weights,
             hidden_nf=32, activation='silu', n_layers=2,attention=False,tanh=True,
             norm_constant=0.00001, inv_sublayers=2, sin_embedding=False,
             normalization_factor=100,aggregation_method='sum',  drop_rate=0.0,
@@ -299,6 +336,8 @@ class Dynamics(nn.Module):
         self.h_embedding=DenseLayer(in_node_nf,hidden_nf,activation=activation)
         in_node_nf = in_node_nf + ligand_group_node_nf + condition_time
         self.h_embedding_out=DenseLayer(hidden_nf, in_node_nf,activation=None)
+
+        self.pretrained_weights=pretrained_weights
         
         if self.model == 'egnn_dynamics':
             self.dynamics = EGNN(
@@ -315,6 +354,7 @@ class Dynamics(nn.Module):
                 normalization_factor=normalization_factor,
                 aggregation_method=aggregation_method,
                 normalization=normalization,
+                pretrained_weights=pretrained_weights
             )
         elif self.model == 'gvp_dynamics':
             self.dynamics = GVPNetwork(
@@ -326,10 +366,22 @@ class Dynamics(nn.Module):
             num_layers=n_layers,
             attention=attention,
             normalization_factor=normalization_factor,
+            pretrained_weights=pretrained_weights
             )
         else:
             raise NotImplementedError
 
+    #     # Load pretrained weights and freeze parameters
+    #     if pretrained_weights:
+    #         self.load_pretrained(pretrained_weights)
+
+    # def load_pretrained(self, weights_path):
+    #     state_dict = torch.load(weights_path, map_location=self.device)
+    #     self.dynamics.load_state_dict(state_dict, strict=False)
+    #     for name, param in self.dynamics.named_parameters():
+    #         if 'additional_e_block' not in name:
+    #             param.requires_grad = False
+    #     print("Pretrained weights loaded and parameters frozen.")
 
     def forward(self,xh, t,  ligand_diff, ligand_group,batch_seg ):
 

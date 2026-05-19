@@ -41,6 +41,10 @@ class EDM(torch.nn.Module):
         alpha_t = self.alpha(gamma_t)
         sigma_t = self.sigma(gamma_t)
         eps_t = self.sample_combined_position_feature_noise(xh,ligand_diff)
+        # print(alpha_t.shape)
+        # print(sigma_t.shape)
+        # print(eps_t.shape)
+        # print(xh.shape)
         z_t = alpha_t[batch_seg] * xh + sigma_t[batch_seg] * eps_t
         z_t = xh * context + z_t * ligand_diff
         return z_t,eps_t
@@ -76,6 +80,14 @@ class EDM(torch.nn.Module):
         )
 
         eps_t_hat = eps_t_hat * ligand_diff
+
+        # Predicted clean positions (for valence penalty)
+        alpha_t = self.alpha(gamma_t)
+        sigma_t = self.sigma(gamma_t)
+        x_pred = (z_t[:, :self.n_dims] - sigma_t[batch_seg] * eps_t_hat[:, :self.n_dims]) \
+                 / alpha_t[batch_seg].clamp(min=1e-8)
+        self._last_x_pred = x_pred   # exposed for lightning.py
+
         # Computing basic error (further used for computing NLL and L2-loss)
         squared_error=(eps_t-eps_t_hat)**2
         error_t=self.inflate_batch_array(squared_error,batch_seg)
@@ -141,6 +153,9 @@ class EDM(torch.nn.Module):
 
         # Sample p(z_s | z_t)
         
+        n_lig = scatter_add(ligand_diff, batch_seg, dim=0).view(-1, 1).clamp(min=1e-6)
+        print(f'[edm] sample_chain: n_atoms={z.shape[0]}, n_lig={n_lig.squeeze().tolist()}, timesteps={timesteps}')
+
         for s in reversed(range(0, timesteps)):
             s_array = torch.full((batch_size, 1), fill_value=s, device=z.device)
             t_array = s_array + 1
@@ -155,6 +170,16 @@ class EDM(torch.nn.Module):
                 batch_seg=batch_seg,
                 ligand_group=ligand_group,
             )
+            # Remove per-sample ligand CoM drift: noise is not zero-CoM projected,
+            # so the ligand CoM grows exponentially (~1/alpha_t_given_s per step).
+            # Centering ligand around origin each step keeps inputs in-distribution.
+            z_x = z[:, :self.n_dims]
+            lig_com = scatter_add(z_x * ligand_diff, batch_seg, dim=0) / n_lig
+            z = torch.cat([z_x - lig_com[batch_seg] * ligand_diff, z[:, self.n_dims:]], dim=1)
+            if s == 0:
+                z_x2 = z[:, :self.n_dims]
+                lig_com2 = scatter_add(z_x2 * ligand_diff, batch_seg, dim=0) / n_lig
+                print(f'[edm s=0] after corr lig_com={lig_com2[0].tolist()}, z_x_lig max={((z_x2*ligand_diff).abs().max()).item():.2f}')
             if (s*keep_frames) % self.T==0:
                 write_index = (s * keep_frames) // self.T
                 chain[write_index] = self.unnormalize_z(z)

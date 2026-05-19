@@ -13,6 +13,7 @@ from src.edm import EDM
 from src.visualizer import visualize_chain
 from src.SA_Score.sascorer import compute_sa_score   
 from src.molecule_builder import BasicLigandMetrics, build_mol,extract_ligand,sanitycheck,write_xyz_file
+from src.valence_penalty import soft_valence_penalty
 from typing import Dict, List, Optional
 from torch_geometric.loader import DataLoader
 from torch_scatter import scatter_add
@@ -38,8 +39,9 @@ class DDPM(pl.LightningModule):
         inv_sublayers, sin_embedding,  aggregation_method,normalization,
         
         diffusion_steps, diffusion_noise_schedule, diffusion_noise_precision, diffusion_loss_type,
-        lr,batch_size,torch_device, model,test_epochs,
+        lr,batch_size,torch_device, model,test_epochs,pretrained_weights,
         samples_dir=None, center_of_mass='context',clip_grad=False,
+        valence_lambda=0.0,
     ):
         super(DDPM, self).__init__()
 
@@ -60,12 +62,15 @@ class DDPM(pl.LightningModule):
         self.loss_type = diffusion_loss_type
         self.T=diffusion_steps
         self.clip_grad=clip_grad
+        self.valence_lambda = valence_lambda
         if self.clip_grad:
             self.gradnorm_queue = utils.Queue()
             self.gradnorm_queue.add(3000)
         
         self.ligand_metrics=BasicLigandMetrics()
         
+        self.pretrained_weights=pretrained_weights  #transfer parameter to the egnn and gvp
+
         # save targets in each batch to compute metric overall epoch
         self.training_step_outputs = []   
         self.validation_step_outputs = []
@@ -88,7 +93,8 @@ class DDPM(pl.LightningModule):
             device=torch_device,
             model=model,
             normalization=normalization,
-            drop_rate=drop_rate
+            drop_rate=drop_rate,
+            pretrained_weights=pretrained_weights
         )
 
         self.edm = EDM(
@@ -183,22 +189,48 @@ class DDPM(pl.LightningModule):
         try:
             nll, metrics = self.forward(data)
         except RuntimeError as e:
-            # this is not supported for multi-GPU
             if self.trainer.num_devices < 2 and 'out of memory' in str(e):
                 print('WARNING: ran out of memory, skipping to the next batch')
                 return None
             else:
                 raise e
+        except utils.FoundNaNException:
+            print('WARNING: NaN detected in forward pass, skipping batch')
+            return None
+        if torch.isnan(nll).any():
+            print('WARNING: NaN in loss, skipping batch')
+            return None
 
         loss = nll.mean(0)
+
+        # Soft valence penalty: guides model to place atoms at chemically valid positions
+        if self.valence_lambda > 0 and hasattr(self.edm, '_last_x_pred'):
+            try:
+                pen = soft_valence_penalty(
+                    self.edm._last_x_pred,
+                    data['one_hot'],
+                    data['ligand_diff'],
+                    data.batch,
+                )
+                if not torch.isnan(pen):
+                    loss = loss + self.valence_lambda * pen
+                    metrics['valence_penalty'] = pen.detach()
+            except Exception:
+                pass
+
         metrics['loss']=loss
         self.log_metrics(metrics, 'train', batch_size=int(torch.max(data.batch))+1)
         self.training_step_outputs.append(metrics)
         return metrics
 
     def _shared_eval_step(self, data, prefix, *args):
-        nll, metrics = self.forward(data)
+        try:
+            nll, metrics = self.forward(data)
+        except utils.FoundNaNException:
+            return None
         loss = nll.mean(0)
+        if torch.isnan(loss):
+            return None
         metrics['loss'] = loss
         self.log_metrics(metrics, prefix, batch_size=torch.max(data.batch)+1,sync_dist=True)
         if prefix == 'val':
@@ -303,11 +335,15 @@ class DDPM(pl.LightningModule):
                 chain_batch = self.sample_chain(data, keep_frames=self.FRAMES)
             except utils.FoundNaNException as e:
                 continue
-                
+
+            # Skip batch if final positions contain NaN
+            x = chain_batch[0][:, :3]
+            if torch.isnan(x).any():
+                continue
+
             if animation and self.samples_dir is not None and b in [0, 1]:
                 self.generate_animation(chain_batch=chain_batch, batch_i=b,batch_seg=batch_seg,metals=metals)
             # Get final complexes from chains – for computing metrics
-            x = chain_batch[0][ :, :3]
             x=x+fixed_mean[batch_seg]
             one_hot = chain_batch[0][ :, 3:]
             assert one_hot.shape[1]==self.in_node_nf
@@ -333,19 +369,24 @@ class DDPM(pl.LightningModule):
                         write_xyz_file(positions, atom_types,f'{outdir}/{b}_{i}', metal)
 
 
-        train_smiles=pd.read_csv('../data/train_smiles.csv')
-        train_smiles=train_smiles['smiles'].tolist()
-        for i in connected_mols:
-            if i in train_smiles:
-                num+=1
-        
-        
+        train_smiles_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'train_smiles.csv')
+        if os.path.exists(train_smiles_path) and connected_ligand > 0:
+            train_smiles = pd.read_csv(train_smiles_path, header=None)[0].tolist()
+            for i in connected_mols:
+                if i in train_smiles:
+                    num += 1
+            novelty = 1 - (num / connected_ligand)
+            uniqueness = len(set(connected_mols)) / connected_ligand
+        else:
+            novelty = float('nan')
+            uniqueness = len(set(connected_mols)) / connected_ligand if connected_ligand > 0 else float('nan')
+
         metrics={'valid_ligand':valid_ligand/len(dataset),
-                 'connected_ligand':connected_ligand/valid_ligand,
+                 'connected_ligand':connected_ligand/valid_ligand if valid_ligand > 0 else 0.0,
                  'valid_complex':valid_comp/len(dataset),
-                 'uniqueness':len(set(connected_mols))/connected_ligand,
-                 'novelty':1-(num/connected_ligand),
-                 'sa_score':sa_score/valid_comp}
+                 'uniqueness':uniqueness,
+                 'novelty':novelty,
+                 'sa_score':sa_score/valid_comp if valid_comp > 0 else 0}
         
         print(f'Finish sampling on  {len(dataset)} samples')
         print('Metrics for sampling:')
@@ -426,6 +467,10 @@ class DDPM(pl.LightningModule):
     def aggregate_metric(step_outputs, metric):
         return torch.tensor([out[metric] for out in step_outputs]).mean()
     
+def consistency_loss(x0_pred1, x0_pred2, x0_true):
+    loss_self = F.mse_loss(x0_pred1, x0_pred2)
+    loss_teacher = F.mse_loss(x0_pred1, x0_true)  # optional if teacher available
+    return loss_self + loss_teacher
 
 
    

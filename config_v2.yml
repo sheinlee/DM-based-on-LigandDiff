@@ -1,0 +1,31 @@
+exp_name: 'GVP_fixed_v2'
+checkpoints: models
+logs: logs
+n_epochs: 300
+resume:
+wandb_entity: null
+
+data: data
+train_data: train
+val_data: val
+hidden_nf: 192
+attention: False
+n_layers: 5
+normalization_factor: 100
+normalize_factors: [1, 4, 1]
+
+drop_rate: 0.1
+
+diffusion_steps: 500
+diffusion_noise_schedule: polynomial_2
+diffusion_noise_precision: 1.0e-5
+diffusion_loss_type: l2
+
+lr: 1.0e-4
+batch_size: 16
+device: gpu
+model: gvp_dynamics
+test_epochs: 5
+normalization: batch_norm
+center_of_mass: context
+clip_grad: False

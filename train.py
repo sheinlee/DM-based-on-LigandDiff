@@ -4,6 +4,7 @@ import pwd
 import sys
 import wandb
 import yaml
+import torch
 
 from datetime import datetime
 from pytorch_lightning import Trainer, callbacks, loggers
@@ -38,6 +39,9 @@ def main(args):
     samples_dir = os.path.join(args.logs, 'sample_chain', experiment)
     torch_device = 'cuda:0' if args.device == 'gpu' else 'cpu'
 
+    # 这里设置矩阵乘法的精度
+    if torch_device.startswith('cuda'):
+        torch.set_float32_matmul_precision('medium')
 
     wandb_logger = loggers.WandbLogger(
         save_dir=args.logs,
@@ -86,8 +90,23 @@ def main(args):
         test_epochs=args.test_epochs,
         center_of_mass=args.center_of_mass,
         clip_grad=args.clip_grad,
-        samples_dir=samples_dir)
+        samples_dir=samples_dir,
+        pretrained_weights=args.pretrained_weights,
+        valence_lambda=args.valence_lambda)
     
+    # # 加载预训练权重并冻结参数
+    # if args.pretrained_weights:
+    #     # 加载预训练权重
+    #     pretrained_state = torch.load(args.pretrained_weights, map_location=torch_device)
+    #     ddpm.load_state_dict(pretrained_state, strict=False)
+    #     print("Pretrained weights loaded!")
+
+    #     # 冻结所有旧层的参数
+    #     for name, param in ddpm.named_parameters():
+    #         if 'additional_e_block' not in name:  # 假设你的新层包含这个名字
+    #             param.requires_grad = False
+    #     print("Existing parameters frozen except for new layers.")
+
     checkpoint_callback = callbacks.ModelCheckpoint(
         dirpath=checkpoints_dir,
         filename=experiment + '_{epoch:02d}',
@@ -155,7 +174,9 @@ if __name__ == '__main__':
     p.add_argument('--test_epochs', type=int, default=1)
     p.add_argument('--center_of_mass', type=str, default='context', help='Where to center the data: context | coord_site')
     p.add_argument('--clip_grad', type=eval, default=True,help='True | False')
-    
+    p.add_argument('--pretrained_weights', type=str, default=None, help='Path to the pretrained model weights')
+    p.add_argument('--valence_lambda', type=float, default=0.0, help='Weight of soft valence penalty')
+
     disable_rdkit_logging()
 
     args = p.parse_args()

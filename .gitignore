@@ -1,0 +1,44 @@
+# Large binary files
+*.pt
+*.ckpt
+*.pkl
+*.pkl.gz
+
+# Model checkpoints and outputs
+models/
+generated_samples/
+test_*_out/
+test_cn*_out/
+
+# Logs
+logs/
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# wandb
+wandb/
+
+# Temporary files
+*.tmp
+*_re.xyz
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Large data directories (generate via cif_to_dataset.py)
+data/Ln_data/train.pt
+data/Ln_data/val.pt
+data/train.pt
+data/val.pt
+
+# Keep xyz files in data/Ln_data/train and val (small, 887 structures)
+# but exclude all_ln_oct_xyz (large raw dump)
+data/Ln_data/all_ln_oct_xyz/
+
+# OS
+.DS_Store
