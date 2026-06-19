@@ -33,7 +33,7 @@ def load_train_smiles(path=None, lookup_path=None):
       csd_lookup : {canonical_smiles: [CSD_code, ...]}  (empty if no lookup file)
     """
     if path is None:
-        path = os.path.join(os.path.dirname(__file__), 'data', 'train_smiles.csv')
+        path = os.path.join(os.path.dirname(__file__), 'data', 'train_smiles_bondgnn.csv')
     if lookup_path is None:
         lookup_path = os.path.join(os.path.dirname(__file__), 'data', 'smiles_to_csd.json')
 
