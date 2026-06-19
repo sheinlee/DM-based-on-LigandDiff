@@ -4,6 +4,24 @@ A 3D equivariant diffusion model for *de novo* ligand design in **lanthanide (Ln
 
 ---
 
+## Latest Progress (2026-06)
+
+Validation of high-CN generation on the full CN 4–12 training distribution (`Ln_data_new`; verified true-CN spans 0–12, peaks at CN 8/9; La: n=397, mean 7.4), using the connectivity-aware fine-tuned checkpoint **ep276**:
+
+- **Real CN9 La scaffold → 51/52** generated complexes are clean, chemically-meaningful 9-coordinate La (9 O donors @ 2.5–2.6 Å).
+- **CN12 La scaffold → 53** clean CN 11–14 La complexes.
+- **~17%** of connected generated ligands are topologically identical (Tanimoto = 1.0) to known CSD ligands — e.g. piperidine (`WEBMOF`), (cyclohexylmethyl)amine (`KAWYAK`), and the characteristic Ln oxo-anions nitrate / carbonate / sulfate.
+
+**Evaluation beyond RDKit validity.** A generated complex is accepted only if: the *true* coordination number (O/N donors within real bonding distance) is metal-appropriate, all ligands are connected, there is no atomic clash, and it passes a 2-stage **xtb** (GFN-FF → GFN2, Ln→La closed-shell cap) DFT-readiness test. Clean organic-chelate complexes (e.g. CN8 Yb) relax intact (mean Δlargest_frac +0.085, 6/6 GFN2-converged); aqua/oxo complexes need explicit H before QM.
+
+**Metric notes.**
+- *Connectivity* on metal-stripped, force-merged ligands is mis-specified for coordination complexes (ground truth itself scores conn ≈ 4%) — use as a relative diagnostic only.
+- *molSimplify CN* (`BondedOct=False`) over-counts phantom ring-carbons at ~2.7 Å (≈ +3): a real CN9 = 6 true N donors @ 2.31–2.38 Å + 3 phantom C @ 2.71–2.75 Å. True CN is measured by donor bonding distance, and the phantom carbons relax away under xtb.
+
+**Checkpoint selection.** ep276 was selected by a connectivity-aware criterion (validation VLB anti-correlates with connectivity).
+
+---
+
 ## Key Changes from Original LigandDiff
 
 | Component | Original LigandDiff | This Work |
