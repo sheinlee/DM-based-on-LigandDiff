@@ -12,7 +12,7 @@ from src.egnn import Dynamics
 from src.edm import EDM
 from src.visualizer import visualize_chain
 from src.SA_Score.sascorer import compute_sa_score   
-from src.molecule_builder import BasicLigandMetrics, build_mol,extract_ligand,sanitycheck,write_xyz_file
+from src.molecule_builder import BasicLigandMetrics, build_mol,build_mol_with_bond_gnn,extract_ligand,sanitycheck,write_xyz_file
 from src.valence_penalty import soft_valence_penalty
 from typing import Dict, List, Optional
 from torch_geometric.loader import DataLoader
@@ -67,7 +67,12 @@ class DDPM(pl.LightningModule):
             self.gradnorm_queue = utils.Queue()
             self.gradnorm_queue.add(3000)
         
-        self.ligand_metrics=BasicLigandMetrics()
+        # Eval aligned with generate_test.py: use the trained Bond GNN (F1=0.948)
+        # + relaxed connectivity/atom-count, instead of OpenBabel + 100%-single-
+        # fragment + exact-count, which mechanically reports ~0% on large ligands.
+        self.eval_connectivity_thresh = 0.5
+        self.eval_atom_tol = 2
+        self.ligand_metrics=BasicLigandMetrics(connectivity_thresh=self.eval_connectivity_thresh)
         
         self.pretrained_weights=pretrained_weights  #transfer parameter to the egnn and gvp
 
@@ -348,7 +353,7 @@ class DDPM(pl.LightningModule):
             one_hot = chain_batch[0][ :, 3:]
             assert one_hot.shape[1]==self.in_node_nf
             ligands=extract_ligand(x,one_hot,ligand_diff,batch_seg)
-            rdmols=[build_mol(*graph) for graph in ligands]
+            rdmols=[build_mol_with_bond_gnn(*graph) for graph in ligands]
             (validity, connectivity), (valid, connected_mol,connected_index) = self.ligand_metrics.evaluate_rdmols(rdmols)
             connected_mols.extend([Chem.MolToSmiles(mol) for mol in connected_mol])
             valid_ligand+=validity
@@ -362,7 +367,7 @@ class DDPM(pl.LightningModule):
                     overlapping,liglist=sanitycheck(positions, atom_types,metal)
                     total_atoms=sum(len(lig) for lig in liglist)+1
                     #check if there exists atoms overlapping in the complex or some ligands are not coordinated to the metal
-                    if not overlapping and total_atoms ==natoms[i].item():
+                    if not overlapping and abs(total_atoms - natoms[i].item()) <= self.eval_atom_tol:
                         valid_comp+=1
                         sa_score += compute_sa_score(mol)
                         

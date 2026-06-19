@@ -25,32 +25,47 @@ from molSimplify.Classes.mol3D import mol3D
 from molSimplify.Classes.ligand import ligand_breakdown
 
 
-def load_train_smiles(path=None):
-    """Load training set SMILES for novelty/similarity analysis."""
+def load_train_smiles(path=None, lookup_path=None):
+    """
+    Load training set SMILES + optional CSD lookup for Task 1 comparison.
+    Returns (fps_list, csd_lookup_dict).
+      fps_list   : [(smiles, fingerprint), ...]
+      csd_lookup : {canonical_smiles: [CSD_code, ...]}  (empty if no lookup file)
+    """
     if path is None:
         path = os.path.join(os.path.dirname(__file__), 'data', 'train_smiles.csv')
-    if not os.path.exists(path):
-        return []
-    with open(path) as f:
-        smiles = [s.strip() for s in f if s.strip()]
+    if lookup_path is None:
+        lookup_path = os.path.join(os.path.dirname(__file__), 'data', 'smiles_to_csd.json')
+
     fps = []
-    for smi in smiles:
-        mol = Chem.MolFromSmiles(smi)
-        if mol:
-            fps.append((smi, AllChem.GetMorganFingerprintAsBitVect(mol, 2, 2048)))
-    return fps   # list of (smiles, fingerprint)
+    if os.path.exists(path):
+        with open(path) as f:
+            smiles = [s.strip() for s in f if s.strip()]
+        for smi in smiles:
+            mol = Chem.MolFromSmiles(smi)
+            if mol:
+                fps.append((smi, AllChem.GetMorganFingerprintAsBitVect(mol, 2, 2048)))
+
+    csd_lookup = {}
+    if os.path.exists(lookup_path):
+        import json
+        with open(lookup_path) as f:
+            csd_lookup = json.load(f)
+
+    return fps, csd_lookup
 
 
-def tanimoto_analysis(smi, train_fps):
+def tanimoto_analysis(smi, train_fps, csd_lookup=None):
     """
-    Compare generated SMILES against training set.
-    Returns (best_tanimoto, best_match_smi, is_exact_match).
+    Compare generated SMILES against training set (CSD).
+    Returns (best_tanimoto, best_match_smi, is_exact_match, csd_codes).
+      csd_codes: list of CSD refcodes if exact/near match found, else []
     """
     if not train_fps or not smi:
-        return 0.0, None, False
+        return 0.0, None, False, []
     mol = Chem.MolFromSmiles(smi)
     if mol is None:
-        return 0.0, None, False
+        return 0.0, None, False, []
     fp = AllChem.GetMorganFingerprintAsBitVect(mol, 2, 2048)
     best_sim, best_smi = 0.0, None
     for ref_smi, ref_fp in train_fps:
@@ -58,7 +73,11 @@ def tanimoto_analysis(smi, train_fps):
         if sim > best_sim:
             best_sim, best_smi = sim, ref_smi
     is_exact = (best_sim >= 0.999)
-    return best_sim, best_smi, is_exact
+    # Look up CSD codes for the best match
+    csd_codes = []
+    if best_smi and csd_lookup:
+        csd_codes = csd_lookup.get(best_smi, [])
+    return best_sim, best_smi, is_exact, csd_codes
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--outdir', type=str)
@@ -175,9 +194,10 @@ def main(outdir, model, complex, batch_size=16, n_samples=1,
     ddpm = DDPM.load_from_checkpoint(model, map_location=device).eval().to(device)
     ddpm.ligand_metrics = BasicLigandMetrics(connectivity_thresh=connectivity_thresh)
 
-    # Load training set SMILES for Tanimoto comparison
-    train_fps = load_train_smiles()
-    print(f'Loaded {len(train_fps)} training SMILES for topology comparison')
+    # Load training set SMILES + CSD lookup for topology comparison
+    train_fps, csd_lookup = load_train_smiles()
+    print(f'Loaded {len(train_fps)} training SMILES for topology comparison'
+          f' (CSD lookup: {len(csd_lookup)} entries)')
 
     dataset = read_molecule(complex) * n_samples
     print(f'{len(dataset)} samples will be generated (n_ligands x n_samples)')
@@ -235,21 +255,27 @@ def main(outdir, model, complex, batch_size=16, n_samples=1,
             for mol in connected_mol:
                 try:
                     smi = Chem.MolToSmiles(mol)
-                    sim, match_smi, exact = tanimoto_analysis(smi, train_fps)
+                    sim, match_smi, exact, csd_codes = tanimoto_analysis(
+                        smi, train_fps, csd_lookup)
                     stats.setdefault('tanimoto_sum', 0.0)
                     stats.setdefault('tanimoto_n', 0)
                     stats.setdefault('exact_matches', 0)
-                    stats.setdefault('high_sim', 0)   # Tanimoto > 0.7
+                    stats.setdefault('high_sim', 0)
                     stats['tanimoto_sum'] += sim
                     stats['tanimoto_n'] += 1
                     if exact:
                         stats['exact_matches'] += 1
                     if sim > 0.7:
                         stats['high_sim'] += 1
-                    label = ('EXACT' if exact
-                             else 'sim>{:.0%}'.format(sim) if sim > 0.5
-                             else 'novel')
-                    print(f'    topology {label} (Tanimoto={sim:.3f}): {smi[:60]}')
+
+                    if exact and csd_codes:
+                        print(f'    ★ CSD MATCH (Tanimoto=1.0): {smi[:50]}')
+                        print(f'      CSD refcodes: {", ".join(csd_codes[:5])}')
+                    elif sim > 0.7:
+                        csd_info = f' → CSD: {",".join(csd_codes[:3])}' if csd_codes else ''
+                        print(f'    ◆ same scaffold (Tanimoto={sim:.3f}): {smi[:50]}{csd_info}')
+                    else:
+                        print(f'    · novel (Tanimoto={sim:.3f}): {smi[:60]}')
                 except Exception:
                     pass
 
@@ -300,8 +326,8 @@ def main(outdir, model, complex, batch_size=16, n_samples=1,
     if n_tan > 0:
         print(f'\n=== Topology vs CSD Training Set ({n_tan} connected ligands) ===')
         print(f'  Avg Tanimoto:      {avg_tan:.3f}')
-        print(f'  High sim (>0.7):   {high}/{n_tan}  ← same scaffold as known Ln ligand')
-        print(f'  Exact match:       {exact}/{n_tan}  ← reproduced training structure')
+        print(f'  High sim (>0.7):   {high}/{n_tan}  ← same scaffold as CSD structure')
+        print(f'  Exact match (★):   {exact}/{n_tan}  ← topology identical to CSD ligand')
         print(f'  Novel (<0.7):      {n_tan-high}/{n_tan}  ← new chemical scaffold')
     print(f'\nOutput directory: {outdir}')
 

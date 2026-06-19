@@ -267,7 +267,7 @@ class BasicLigandMetrics(object):
             mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True)
             largest_frag_size = max(frag.GetNumAtoms() for frag in mol_frags)
             if largest_frag_size / mol.GetNumAtoms() >= self.connectivity_thresh:
-                connected.append(mol_frags[0])
+                connected.append(max(mol_frags, key=lambda f: f.GetNumAtoms()))
                 connected_index.append(index)
 
         return connected,connected_index, len(connected_index)

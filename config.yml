@@ -1,7 +1,7 @@
 exp_name: 'LigandDiff'
 checkpoints: models
 logs: logs
-n_epochs: 10
+n_epochs: 100
 resume: 
 wandb_entity: null
 
@@ -9,9 +9,9 @@ wandb_entity: null
 data: data
 train_data: train
 val_data: val
-hidden_nf: 64
+hidden_nf: 192
 attention: True
-n_layers: 2
+n_layers: 5
 normalization_factor: 100
 normalize_factors: [1, 4, 10]
 
@@ -22,8 +22,8 @@ diffusion_noise_schedule: polynomial_2
 diffusion_noise_precision: 1.0e-5
 diffusion_loss_type: vlb
 
-lr: 2.0e-4
-batch_size: 2
+lr: 1.0e-4
+batch_size: 64
 device: gpu
 model: gvp_dynamics
 test_epochs: 1
