@@ -4,6 +4,55 @@ A 3D equivariant diffusion model for *de novo* ligand design in **lanthanide (Ln
 
 ---
 
+## Headline result: generated structures reproduce the lanthanide contraction
+
+The strongest evidence that the model has learned real f-block coordination chemistry — not just
+RDKit-valid molecular graphs — is that the **geometry** of its generated complexes is physically
+correct across the entire La→Lu series. Three independent, geometry-level checks (all on `ep276`):
+
+**1. Bond length — the lanthanide contraction.**
+The mean **Ln–O donor distance** of *generated* ligand donors decreases monotonically across the
+series, **La ≈ 2.48 Å → Lu ≈ 2.14 Å**, reproducing the lanthanide contraction.
+
+- Pearson **r = −0.85** — measured on **generated donors only** (context/scaffold donors excluded,
+  so the trend is the model's own atom placement, not retained scaffold).
+- bootstrap 95 % CI **[−0.92, −0.63]**; slope **−19 mÅ / metal**; La→Lu drop **0.34 Å**; n = 286.
+- **Permutation control** (shuffle the metal labels): metal-shuffled null r = 0.0 ± 0.35, giving
+  **p = 3×10⁻⁴**. The metal-dependence is a *learned* behaviour, not a measurement artefact.
+- Experimental CSD reference: r = −0.974.
+- Ln–N shows the same direction but is not significant (r = −0.61, p = 0.054); Ln–Cl too sparse (n=9).
+
+**2. Coordination-angle distribution.**
+The full **donor–M–donor angle distribution** of generated complexes matches the CSD training
+reference to **Wasserstein-1 = 1.2°** (generated 98.1° ± 32.7 vs experimental 99.1° ± 32.0;
+29,731 vs 326,033 angles). The characteristic bimodal shape — adjacent donors ~70–85°, near-*trans*
+~130–145° — is reproduced bin-for-bin. The model gets the coordination **polyhedron**, not just the
+radial distances. Angles are scale-free and unaffected by scaffold conditioning, so this is the
+cleanest geometry test.
+
+**3. Coordination number.**
+The generated first-shell CN distribution (median **8**, mean 7.73) tracks the experimental high-CN
+preference of lanthanides (median 8, mean 7.44; CN 8–10 dominate). Because the generated complexes
+are seed-conditioned on CN 8–10 scaffolds, CN is a *consistency* check rather than a free prediction
+— the angle result above is the unconditioned geometry test.
+
+> **Report RAW geometry, not force-field-relaxed.** These trends live in the **raw model output**.
+> Standard xtb **GFN-FF** relaxation *destroys* the contraction (r collapses −0.94 → −0.13, Ln–O
+> shortened by ~0.17 Å) because GFN-FF's f-in-core parameters are unreliable for the lanthanides. Any
+> downstream relaxation of f-element structures should use an f-aware method (RECP-DFT / an
+> Ln-specific xTB), **not** GFN-FF. This is a practical caution for anyone generating f-block structures.
+
+Reproduce (both scripts are `argparse`-driven; point them at your generated xyz tree):
+
+```bash
+# Bond-length contraction: r, bootstrap CI, permutation control, Shannon-radius axis
+python eval/ln_contraction_stats.py --seeds_dir <held-out seeds> --gen_dir <raw generated xyz>
+# Coordination-angle W1 distance + first-shell CN distribution vs the training reference
+python eval/ln_geom_extra.py        --train_pt  <Ln train.pt>    --gen_dir <raw generated xyz>
+```
+
+---
+
 ## Latest Progress (2026-06)
 
 Validation of high-CN generation on the full CN 4–12 training distribution (`Ln_data_new`; verified true-CN spans 0–12, peaks at CN 8/9; La: n=397, mean 7.4), using the connectivity-aware fine-tuned checkpoint **ep276**:
