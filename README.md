@@ -32,26 +32,41 @@ and the metric code are the *same* ones used for the coordination-site-condition
 every row is directly comparable. Full numbers:
 [`results/heldout_eval_CN8-10.txt`](results/heldout_eval_CN8-10.txt).
 
+**Our strict metric** (RDKit `rdDetermineBonds` on xtb-relaxed geometry). `ep276` = the
+connectivity-fine-tuned checkpoint (`dconn3_from274_conn_epoch=276`) used across this README.
+
 | model | training data | Validity | Novelty (graph) | Yield | Recall | partial-overlap |
 |-------|---|:---:|:---:|:---:|:---:|:---:|
-| **full** (GVP, ~ep276) | Ln_data_new (14,478, CN 4–12) | 59.8 % | 86.3 % | 4.9 % | 0/24 | 0.587 |
+| **ep276** (conn-finetune, big data) | Ln_data_new (14,478, CN 4–12) | 62.9 % | 86.2 % | **10.0 %** | 0/24 | 0.611 |
 | **transfer** (GVP, TM→Ln, ep134) | TM pre-train → Ln fine-tune | 54.0 % | 88.2 % | 4.9 % | 0/24 | 0.473 |
 | baseline (GVP 192/5) | Ln (12,738) | 60.4 % | 84.1 % | 5.5 % | 0/24 | 0.611 |
 | B (GVP 256/7, capacity) | Ln (12,738) | 57.9 % | 87.1 % | 3.7 % | 0/24 | 0.528 |
-| Multi (192/6, **coord-site**) | Ln (12,738) | **68.0 %** | **95.6 %** | **9.9 %** | 0/27 | 0.646 |
+| Multi (192/6, **coord-site**) | Ln (12,738) | **68.0 %** | **95.6 %** | 9.9 % | 0/27 | 0.646 |
 
-- **Bigger Ln data alone doesn't lift the plain model.** `full` (trained on the larger CN 4–12
-  `Ln_data_new`, ~ep276) lands at *baseline* level (Validity 59.8 %) — more data and longer training
-  did not close the gap to the coordination-site-conditioned `Multi` (68.0 %).
-- **Staged TM→Ln transfer did not help** (Validity 54.0 %, lowest target fidelity 0.473): more
-  diverse but less faithful, and undertrained at ep134.
-- **Conditioning > data / capacity / transfer.** Telling the model *where the coordination sites
-  are* (`Multi`) beats bigger data, more parameters (`B`), and TM pre-training. All models score
-  **0 % exact topology recall**, consistent with the whole de novo coordination-complex field.
+**Literature metric** (OpenBabel + molSimplify ligand split — reproduces how LigandDiff scores its
+own numbers; d-block reference rows for context):
 
-> **Metric note.** These are our *strict* metric (RDKit `rdDetermineBonds` on xtb-relaxed geometry).
-> Under the *literature's own* algorithm (OpenBabel bond perception on raw output) the same class of
-> Ln model reaches ~94 % validity — the gap is the metric, not the chemistry. See the companion
+| model | Validity | Connectivity | Uniqueness | Novelty |
+|-------|:---:|:---:|:---:|:---:|
+| **ep276** | 100 %¹ | 76.1 % | 60.7 % | 96.3 % |
+| **transfer** | 100 %¹ | 74.2 % | 70.9 % | 96.8 % |
+| *LigandDiff (d-block)* | *94 %* | *96 %* | *97 %* | *96 %* |
+| *multi-LigandDiff (d-block)* | *99 %* | *99 %* | *96 %* | *100 %* |
+
+¹ Validity is *degenerate* at 100 % for the single-ligand Ln model (OpenBabel `build_mol` almost
+always yields a sanitizable molecule) → not informative here; **connectivity** is the diagnostic.
+
+- **The connectivity fine-tune matters.** `ep276` (Validity 62.9 %, **Yield 10.0 %**) clearly beats
+  its `ep274` base (59.8 % / 4.9 %) — yield roughly *doubled*, reaching ≈ the coordination-site-
+  conditioned `Multi` (9.9 %). Bigger data + connectivity fine-tuning closes the **yield** gap.
+- **`Multi` still leads overall** (Validity 68.0 %, Novelty 95.6 %) — telling the model *where the
+  coordination sites are* helps beyond data / capacity / transfer.
+- **Staged TM→Ln transfer underperforms** (Validity 54.0 %, lowest fidelity 0.473; undertrained).
+- Under the literature algorithm the models reach **novelty ~96 %** (in the literature band); the real
+  gap is **connectivity ~75 %** vs LigandDiff's 96 % (harder f-block domain + a metric that is fragile
+  for coordination ligands, see the note above). All models: **0 % exact topology recall**.
+
+> See the companion
 > [Multi-Liganddiff-on-Ln-complexes](https://github.com/sheinlee/Multi-Liganddiff-on-Ln-complexes)
 > repo for the full metric-algorithm analysis and the combined-TM+Ln study.
 
