@@ -22,6 +22,41 @@ Validation of high-CN generation on the full CN 4–12 training distribution (`L
 
 ---
 
+## Held-out evaluation (V / U / N + yield + recall)
+
+Beyond the qualitative high-CN checks above, the model was scored on a **held-out generative
+benchmark**: 40 held-out Ln seeds (CN 8–10), save-all generation, xtb GFN-FF relaxation, then the
+standard per-ligand **Validity / Uniqueness / Novelty** trio plus a complex-level **Yield** and a
+whole-complex **topology Recall**. The held-out reference (`Ln_data_new/val`), the novelty reference,
+and the metric code are the *same* ones used for the coordination-site-conditioned `Multi` model, so
+every row is directly comparable. Full numbers:
+[`results/heldout_eval_CN8-10.txt`](results/heldout_eval_CN8-10.txt).
+
+| model | training data | Validity | Novelty (graph) | Yield | Recall | partial-overlap |
+|-------|---|:---:|:---:|:---:|:---:|:---:|
+| **full** (GVP, ~ep276) | Ln_data_new (14,478, CN 4–12) | 59.8 % | 86.3 % | 4.9 % | 0/24 | 0.587 |
+| **transfer** (GVP, TM→Ln, ep134) | TM pre-train → Ln fine-tune | 54.0 % | 88.2 % | 4.9 % | 0/24 | 0.473 |
+| baseline (GVP 192/5) | Ln (12,738) | 60.4 % | 84.1 % | 5.5 % | 0/24 | 0.611 |
+| B (GVP 256/7, capacity) | Ln (12,738) | 57.9 % | 87.1 % | 3.7 % | 0/24 | 0.528 |
+| Multi (192/6, **coord-site**) | Ln (12,738) | **68.0 %** | **95.6 %** | **9.9 %** | 0/27 | 0.646 |
+
+- **Bigger Ln data alone doesn't lift the plain model.** `full` (trained on the larger CN 4–12
+  `Ln_data_new`, ~ep276) lands at *baseline* level (Validity 59.8 %) — more data and longer training
+  did not close the gap to the coordination-site-conditioned `Multi` (68.0 %).
+- **Staged TM→Ln transfer did not help** (Validity 54.0 %, lowest target fidelity 0.473): more
+  diverse but less faithful, and undertrained at ep134.
+- **Conditioning > data / capacity / transfer.** Telling the model *where the coordination sites
+  are* (`Multi`) beats bigger data, more parameters (`B`), and TM pre-training. All models score
+  **0 % exact topology recall**, consistent with the whole de novo coordination-complex field.
+
+> **Metric note.** These are our *strict* metric (RDKit `rdDetermineBonds` on xtb-relaxed geometry).
+> Under the *literature's own* algorithm (OpenBabel bond perception on raw output) the same class of
+> Ln model reaches ~94 % validity — the gap is the metric, not the chemistry. See the companion
+> [Multi-Liganddiff-on-Ln-complexes](https://github.com/sheinlee/Multi-Liganddiff-on-Ln-complexes)
+> repo for the full metric-algorithm analysis and the combined-TM+Ln study.
+
+---
+
 ## Key Changes from Original LigandDiff
 
 | Component | Original LigandDiff | This Work |

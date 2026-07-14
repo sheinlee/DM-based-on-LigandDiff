@@ -1,0 +1,59 @@
+Held-out generative evaluation of the single-ligand DM (DM-based-on-LigandDiff) models.
+
+Protocol: 40 held-out Ln seeds, CN 8-10 filter, save-all generation (generate_saveall, n_samples=8),
+xtb GFN-FF relaxation, then per-ligand Validity / Uniqueness / Novelty + complex-level Yield +
+whole-complex topology Recall. SAME held-out reference (Ln_data_new/val), SAME novelty reference
+(ref_Ln: 1478 SMILES / 5624 WL graphs), SAME metric code as the coordination-site-conditioned Multi
+model -> the two blocks below and the reference rows are directly comparable.
+
+Our strict metric: RDKit rdDetermineBonds (charge 0,+-1,+-2) + SanitizeMol per ligand, on relaxed
+geometry. (Under the literature's own OpenBabel-on-raw algorithm the same class of model scores
+~94% validity; see the companion Multi-Liganddiff-on-Ln-complexes repo for that analysis.)
+
+=================================================================================================
+SUMMARY (CN 8-10, xtb-relaxed, our metric)
+model                             train data              Validity  Nov-graph  Yield  Recall  partial
+full        (GVP, ~ep276)         Ln_data_new (14,478)     59.8%     86.3%      4.9%   0/24    0.587
+transfer    (GVP, TM->Ln, ep134)  TM pretrain -> Ln FT     54.0%     88.2%      4.9%   0/24    0.473
+--- reference rows (same eval; from the Ln project, see Multi-Liganddiff-on-Ln-complexes) ---
+baseline    (GVP 192/5)           Ln (12,738)              60.4%     84.1%      5.5%   0/24    0.611
+B           (GVP 256/7, capacity) Ln (12,738)              57.9%     87.1%      3.7%   0/24    0.528
+Multi       (192/6, coord_site)   Ln (12,738)              68.0%     95.6%      9.9%   0/27    0.646
+
+READING
+- Bigger Ln data alone does NOT lift the plain model: `full` (larger CN 4-12 Ln_data_new, ~ep276)
+  lands at baseline level (Validity 59.8 vs 60.4), well below the coordination-site-conditioned
+  Multi (68.0). More data + longer training did not close the gap.
+- Staged TM->Ln transfer (ep134) has the LOWEST validity (54.0) and lowest target fidelity
+  (partial 0.473): more diverse/novel but less faithful, and undertrained at ep134 (a confound).
+- Conditioning > data / capacity / transfer: telling the model WHERE the coordination sites are
+  (Multi) beats bigger data, more parameters (B), and TM pre-training.
+- All models score 0% exact topology recall -- consistent with the entire de novo
+  coordination-complex generation field.
+
+=================================================================================================
+RAW: full (GVP, ~ep276; Ln_data_new bigger data)
+=== GENERATIVE METRICS  (heldout_gen_full_ep274_relaxed) [CN 8-10] ===
+  complexes evaluated:        607
+  total ligands:              2351
+  VALIDITY   (valid/ligands): 1405/2351 = 59.8%
+  UNIQUENESS SMILES (uniq/valid): 510/1405 = 36.3%
+  UNIQUENESS graph  (uniq/valid): 498/1405 = 35.4%
+  NOVELTY    SMILES (new/uniq):   465/510 = 91.2%   (ref 1478 SMILES)
+  NOVELTY    graph  (new/uniq):   430/498 = 86.3%   (ref 5624 graphs)
+  complex YIELD (meaningful): 30/607 = 4.9%
+=== TOPOLOGY RECALL [CN 8-10] ===
+  seeds with a target: 24 ;  RECALL: 0/24 = 0.0% ;  mean best partial-overlap: 0.587
+
+RAW: transfer (GVP, staged TM->Ln, ep134)
+=== GENERATIVE METRICS  (heldout_gen_transfer_ep134_relaxed) [CN 8-10] ===
+  complexes evaluated:        655
+  total ligands:              2324
+  VALIDITY   (valid/ligands): 1254/2324 = 54.0%
+  UNIQUENESS SMILES (uniq/valid): 577/1254 = 46.0%
+  UNIQUENESS graph  (uniq/valid): 553/1254 = 44.1%
+  NOVELTY    SMILES (new/uniq):   527/577 = 91.3%   (ref 1478 SMILES)
+  NOVELTY    graph  (new/uniq):   488/553 = 88.2%   (ref 5624 graphs)
+  complex YIELD (meaningful): 32/655 = 4.9%
+=== TOPOLOGY RECALL [CN 8-10] ===
+  seeds with a target: 24 ;  RECALL: 0/24 = 0.0% ;  mean best partial-overlap: 0.473
